@@ -6,7 +6,6 @@ from app.database.connection import get_db
 from app.schemas.sensor_magnitud import SensorMagnitudResponse
 from app.crud import sensor as crud_sensor
 from app.crud import sensor_magnitud as crud_sensor_magnitud
-from app.models.sensor_magnitud import SensorMagnitud
 
 router = APIRouter(tags=["sensor-magnitudes"])
 
@@ -24,7 +23,7 @@ def get_magnitudes_por_sensor(id: int, db: Session = Depends(get_db)):
 
 @router.get("/sensor-magnitudes/{id}", response_model=SensorMagnitudResponse)
 def get_sensor_magnitud_por_id(id: int, db: Session = Depends(get_db)):
-    sensor_magnitud = db.query(SensorMagnitud).filter(SensorMagnitud.id == id).first()
+    sensor_magnitud = crud_sensor_magnitud.get_sensor_magnitud_by_id(db=db, id=id)
     if not sensor_magnitud:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

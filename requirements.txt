@@ -6,3 +6,4 @@ pydantic
 paho-mqtt
 python-dotenv
 tzdata
+httpx

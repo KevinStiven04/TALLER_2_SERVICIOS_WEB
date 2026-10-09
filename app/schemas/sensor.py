@@ -1,5 +1,5 @@
-from datetime import datetime
 from pydantic import BaseModel, ConfigDict
+from app.schemas.fechas import FechaColombia
 
 
 class SensorBase(BaseModel):
@@ -12,6 +12,6 @@ class SensorBase(BaseModel):
 
 class SensorResponse(SensorBase):
     id: int
-    fecha_registro: datetime
+    fecha_registro: FechaColombia
 
     model_config = ConfigDict(from_attributes=True)

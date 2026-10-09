@@ -7,43 +7,48 @@ from sqlalchemy.orm import Session
 from app.database.connection import get_db
 from app.schemas.medicion import MedicionResponse
 from app.crud import sensor as crud_sensor
+from app.crud import sensor_magnitud as crud_sensor_magnitud
 from app.crud import medicion as crud_medicion
-from app.models.medicion import Medicion
 
 router = APIRouter(tags=["mediciones"])
 
 COLOMBIA_TZ = ZoneInfo("America/Bogota")
 
 
-def convertir_a_colombia(medicion: Medicion) -> MedicionResponse:
-    ts = medicion.timestamp_utc
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    ts_colombia = ts.astimezone(COLOMBIA_TZ)
+def normalizar_a_utc(fecha: Optional[datetime]) -> Optional[datetime]:
+    """Si la fecha no tiene zona horaria, se asume hora local de Colombia y se convierte a UTC."""
+    if fecha is None:
+        return None
+    if fecha.tzinfo is None:
+        fecha = fecha.replace(tzinfo=COLOMBIA_TZ)
+    return fecha.astimezone(timezone.utc)
 
-    fecha_rec = medicion.fecha_recepcion
-    if fecha_rec and fecha_rec.tzinfo is None:
-        fecha_rec = fecha_rec.replace(tzinfo=timezone.utc)
-    fecha_rec_colombia = fecha_rec.astimezone(COLOMBIA_TZ) if fecha_rec else fecha_rec
 
-    return MedicionResponse(
-        id=medicion.id,
-        sensor_magnitud_id=medicion.sensor_magnitud_id,
-        valor=medicion.valor,
-        timestamp_utc=ts_colombia,
-        fecha_recepcion=fecha_rec_colombia
-    )
+def validar_sensor_y_magnitud(db: Session, sensor_id: int, magnitud: Optional[str] = None):
+    sensor = crud_sensor.get_sensor(db=db, sensor_id=sensor_id)
+    if not sensor:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Sensor con ID {sensor_id} no encontrado"
+        )
+    if magnitud is not None:
+        sm = crud_sensor_magnitud.get_magnitud_by_sensor_and_name(db=db, sensor_id=sensor_id, magnitud=magnitud)
+        if not sm:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"El sensor {sensor_id} no tiene configurada la magnitud '{magnitud}'"
+            )
 
 
 @router.get("/mediciones/{id}", response_model=MedicionResponse)
 def get_medicion_por_id(id: int, db: Session = Depends(get_db)):
-    medicion = db.query(Medicion).filter(Medicion.id == id).first()
+    medicion = crud_medicion.get_medicion_by_id(db=db, medicion_id=id)
     if not medicion:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Medición con ID {id} no encontrada"
         )
-    return convertir_a_colombia(medicion)
+    return medicion
 
 
 @router.get("/sensores/{id}/mediciones", response_model=List[MedicionResponse])
@@ -52,48 +57,43 @@ def get_mediciones_por_sensor(
     magnitud: Optional[str] = Query(None, description="Filtrar por nombre de magnitud"),
     desde: Optional[datetime] = Query(None, description="Fecha y hora de inicio"),
     hasta: Optional[datetime] = Query(None, description="Fecha y hora de fin"),
-    limit: int = Query(100, ge=1, description="Límite de resultados a retornar"),
+    limit: int = Query(100, ge=1, le=1000, description="Límite de resultados a retornar"),
     db: Session = Depends(get_db)
 ):
-    sensor = crud_sensor.get_sensor(db=db, sensor_id=id)
-    if not sensor:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Sensor con ID {id} no encontrado"
-        )
+    validar_sensor_y_magnitud(db=db, sensor_id=id, magnitud=magnitud)
 
-    if desde is not None and hasta is not None and desde > hasta:
+    desde_utc = normalizar_a_utc(desde)
+    hasta_utc = normalizar_a_utc(hasta)
+
+    if desde_utc is not None and hasta_utc is not None and desde_utc > hasta_utc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="El parámetro 'desde' no puede ser mayor que 'hasta'"
         )
 
-    mediciones = crud_medicion.get_mediciones_by_sensor(
+    return crud_medicion.get_mediciones_by_sensor(
         db=db,
         sensor_id=id,
         magnitud=magnitud,
-        desde=desde,
-        hasta=hasta,
+        desde=desde_utc,
+        hasta=hasta_utc,
         limit=limit
     )
 
-    return [convertir_a_colombia(m) for m in mediciones]
-
 
 @router.get("/sensores/{id}/ultima-medicion", response_model=MedicionResponse)
-def get_ultima_medicion_sensor(id: int, db: Session = Depends(get_db)):
-    sensor = crud_sensor.get_sensor(db=db, sensor_id=id)
-    if not sensor:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Sensor con ID {id} no encontrado"
-        )
+def get_ultima_medicion_sensor(
+    id: int,
+    magnitud: Optional[str] = Query(None, description="Filtrar por nombre de magnitud"),
+    db: Session = Depends(get_db)
+):
+    validar_sensor_y_magnitud(db=db, sensor_id=id, magnitud=magnitud)
 
-    ultima = crud_medicion.get_ultima_medicion(db=db, sensor_id=id)
+    ultima = crud_medicion.get_ultima_medicion(db=db, sensor_id=id, magnitud=magnitud)
     if not ultima:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No se encontraron mediciones para el sensor con ID {id}"
         )
 
-    return convertir_a_colombia(ultima)
+    return ultima
